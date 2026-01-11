@@ -17,7 +17,7 @@ setwd('/UK_BB/brainbody/cognition/folds/')
 
 Upload train and test sets generated and scaled in Python
 ```{r}
-base_path <- "/media/hcs-sci-psy-narun/IBu/UK_BB/brainbody/cognition/folds/fold_"
+base_path <- "/UK_BB/brainbody/cognition/folds/fold_"
 file_names <- c("cogscores_12T_i2_train_with_id_scaled_fold_", "cogscores_12T_i2_test_with_id_scaled_fold_")
 
 for (i in 0:4) {
@@ -376,5 +376,6 @@ In standardized output (what="std"), these are the residual variances after acco
 
 *Residual variance* = Variance NOT explained by the latent factors
 *1 - Residual variance* = Variance EXPLAINED by the latent factors (R²)
+
 
 This gives the average proportion of variance explained across all observed variables
