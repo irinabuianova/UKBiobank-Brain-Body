@@ -1,0 +1,328 @@
+---
+title: "Mediation-analysis"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+date: "2026-05-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Installation and loading script
+install_and_load <- function() {
+  
+  # List of packages
+  packages <- c(
+    "lavaan",    # Structural equation modeling
+    "dplyr",     # Data manipulation
+    "tidyr",     # Data tidying
+    "purrr",     # Functional programming
+    "readr",     # Read CSV files
+    "knitr",     # Pretty tables
+    "openxlsx"   # Write Excel files
+  )
+  
+  # Check which packages are missing
+  missing <- packages[!packages %in% installed.packages()[,"Package"]]
+  
+  # Install missing packages
+  if(length(missing) > 0) {
+    cat("Installing missing packages:", paste(missing, collapse = ", "), "\n")
+    install.packages(missing, dependencies = TRUE)
+  } else {
+    cat("All packages are already installed.\n")
+  }
+  
+  # Load all packages
+  cat("\nLoading packages...\n")
+  for(pkg in packages) {
+    library(pkg, character.only = TRUE)
+    cat("✓ Loaded:", pkg, "\n")
+  }
+  
+  cat("\n Setup complete! Ready for mediation analysis.\n")
+}
+
+# Run the setup
+install_and_load()
+
+```{r}
+# Load required libraries
+library(lavaan)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(readr)
+library(knitr)
+library(openxlsx)
+```
+
+```{r}
+# Set path
+commonality_path <- "/UK_BB/brainbody/commonality"
+
+# Define modalities
+brain_modalities <- c("allmri", "rs", "dwi", "smri")
+body_modality <- "body"  # composite body
+
+# Function to load and prepare data for mediation
+load_mediation_data <- function(brain_mod, body_mod, data_path) {
+  
+  # File name pattern
+  file_name <- paste0("g_obs_pred_brain_", brain_mod, "_body.csv")
+  file_path <- file.path(data_path, file_name)
+  
+  if(!file.exists(file_path)) {
+    warning(paste("File not found:", file_path))
+    return(NULL)
+  }
+  
+  data <- read_csv(file_path, show_col_types = FALSE)
+  
+  # Ddynamic renaming
+  data <- data %>%
+    rename(
+      g_observed = g_obs_test,
+      g_brain = all_of(paste0("g_pred_", brain_mod, "_test")),
+      g_body = g_pred_body_test
+    ) %>%
+    
+    # Z-score all three variables
+    mutate(
+      g_observed = scale(g_observed)[,1],
+      g_brain    = scale(g_brain)[,1],
+      g_body     = scale(g_body)[,1]
+    )
+  
+  return(data)
+}
+```
+
+
+```{r}
+# Load all datasets
+mediation_data_list <- list()
+
+for(brain in brain_modalities) {
+  cat("\nLoading data for brain modality:", brain, "\n")
+  data <- load_mediation_data(brain, body_modality, commonality_path)
+  
+  if(!is.null(data)) {
+    mediation_data_list[[brain]] <- data
+    cat("  - Rows:", nrow(data), "\n")
+    cat("  - Columns:", names(data), "\n")
+  }
+}
+print(head(data), digits = 3)
+```
+                
+```{r}
+# Function to run mediation analysis
+run_mediation <- function(data, brain_mod) {
+  
+  # Lavaan model specification
+  # X = g_body (body prediction)
+  # M = g_brain (brain prediction)
+  # Y = g_observed (observed G factor)
+
+  
+  model <- '
+    # Direct effect (c) and mediator effect (b)
+    g_observed ~ b * g_brain + c * g_body
+    
+    # Path from body to brain (a)
+    g_brain ~ a * g_body
+    
+    # Indirect effect (a * b)
+    ab := a * b
+    
+    # Total effect (c + ab)
+    total := c + ab
+    
+    # Proportion mediated
+    prop := ab / total
+  '
+  
+  # Fit model with bootstrap
+  set.seed(1234)
+  
+  fit <- lavaan::sem(model, 
+             data = data,
+             test = "bollen.stine",
+             se = "bootstrap", 
+             bootstrap = 5000,
+             #mimic = "MPlus"
+             )  # Similar to MPlus defaults
+  
+  # Get parameter estimates with BCa confidence intervals
+  params <- lavaan::parameterEstimates(fit, 
+                               boot.ci.type = "bca.simple",
+                               level = 0.95, 
+                               ci = TRUE,
+                               standardized = TRUE)
+  
+  kable(params)
+            
+  # Summary
+  lav_sum = lavaan::summary(fit, 
+                standardized = TRUE, 
+                rsquare = TRUE, 
+                fit.measures = TRUE)
+
+  # Get fit measures
+  fit_measures <- fitMeasures(fit, 
+                              c("chisq", "df", "pvalue", "cfi", "rmsea", "srmr", "aic", "bic"))
+  
+  # Get R-squared values
+  rsq <- inspect(fit, "r2")
+  
+  # Extract key results
+  results <- list(
+    brain_modality = brain_mod,
+    sample_size = nrow(data),
+    parameters = params,
+    fit_measures = fit_measures,
+    r_squared = rsq,
+    lavaan_fit = fit,
+    summary = lav_sum
+  )
+  
+  return(results)
+}
+```
+
+```{r}
+# Run mediation
+mediation_results <- lapply(
+  names(mediation_data_list),
+  function(brain_mod) run_mediation(mediation_data_list[[brain_mod]], brain_mod)
+)
+
+# Name the list elements
+names(mediation_results) <- names(mediation_data_list)
+```
+
+Print parameter table for each modality
+```{r}
+for (mod in names(mediation_results)) {
+  print(mediation_results[[mod]]$parameters)
+}
+```
+
+Print R²
+```{r}
+for (mod in names(mediation_results)) {
+  cat("\nR² for", mod, ":\n")
+  print(mediation_results[[mod]]$r_squared)
+}
+```
+Print fit measures
+```{r}
+for (mod in names(mediation_results)) {
+  cat("\nFit measures for", mod, ":\n")
+  print(mediation_results[[mod]]$fit_measures)
+}
+```
+
+Combine all parameter estimates into one table (simple)
+```{r}
+library(dplyr)
+
+all_params <- bind_rows(
+  lapply(mediation_results, function(res) {
+    res$parameters %>%
+      mutate(brain_modality = res$brain_modality,
+             sample_size = res$sample_size)
+  })
+)
+
+print(all_params)
+write.csv(all_params, "mediation_all_parameters.csv", row.names = FALSE)
+```
+
+age → (g_body, g_brain) → g_observed
+
+```{r}
+# Load combined file with age
+combined_file <- file.path(commonality_path, "g_obs_pred_brain_plus_body_with_age.csv")
+
+if (!file.exists(combined_file)) {
+  stop("Combined file with age not found: g_obs_pred_brain_plus_body_with_age.csv")
+}
+
+df_all <- read_csv(combined_file, show_col_types = FALSE)
+
+# Prepare data (rename + z-score)
+data_age <- df_all %>%
+  select(
+    g_observed = g_obs,
+    g_body     = g_pred_body,
+    g_brain    = g_pred_brain,
+    age        = Age
+  ) %>%
+  mutate(
+    g_observed = scale(g_observed)[,1],
+    g_body     = scale(g_body)[,1],
+    g_brain    = scale(g_brain)[,1],
+    age        = scale(age)[,1]
+  )
+
+# Mediation model
+model_age <- '
+  # outcome model
+  g_observed  ~ b_g_body*g_body
+  g_observed  ~ b_g_brain*g_brain
+  g_observed  ~ c*age
+
+  # mediator models
+  g_body  ~ a_g_body*age
+  g_brain ~ a_g_brain*age
+
+  # indirect effects
+  indirect_g_body  := a_g_body  * b_g_body
+  indirect_g_brain := a_g_brain * b_g_brain
+  sumIndirect      := indirect_g_body + indirect_g_brain
+
+  # direct effect
+  direct := c
+
+  # total effect
+  total := direct + sumIndirect
+
+  # proportions
+  prop_g_body      := indirect_g_body  / total
+  prop_g_brain     := indirect_g_brain / total
+  propSumIndirect  := sumIndirect      / total
+
+  # allow mediators to covary
+  g_body ~~ g_brain
+'
+
+# Fit model
+set.seed(1234)
+fit_age <- lavaan::sem(
+  model_age,
+  data = data_age,
+  test = "bollen.stine",
+  se = "bootstrap",
+  bootstrap = 5000
+)
+
+# Extract parameters
+params_age <- parameterEstimates(
+  fit_age,
+  boot.ci.type = "bca.simple",
+  level = 0.95,
+  ci = TRUE,
+  standardized = TRUE
+)
+
+print(params_age)
+
+# Save results
+write.csv(params_age, "mediation_age_all_parameters.csv", row.names = FALSE)
+```
+
